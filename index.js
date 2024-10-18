@@ -1,5 +1,5 @@
 require("dotenv").config();
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const express = require("express");
 const cors = require("cors");
 const nodemailer = require('nodemailer');
@@ -37,6 +37,7 @@ async function run() {
         await client.connect();
         const smtpCollection = client.db("emailAutomationDB").collection("smtp");
 
+        //send email and save DB
         app.post('/send-email', async (req, res) => {
             const { email, password, hostname, port, encryption, to, subject, message } = req.body;
             // console.log(email, password, hostname, port, encryption, to, subject, message);
@@ -83,7 +84,38 @@ async function run() {
             }
         })
 
+        //get email who sender
+        app.get("/smtp-email", async (req, res) => {
+            const result = await smtpCollection.find().toArray();
+            res.send(result);
+        })
 
+        // Get a single email by ID
+        app.get("/smtp-email/:id", async (req, res) => {
+            const { id } = req.params;
+            const result = await smtpCollection.findOne({ _id: new ObjectId(id) });
+            res.send(result);
+        });
+
+        // update smtp email by ID 
+        app.patch("/smtp-update/:id", async (req, res) => {
+            const { id } = req.params;
+            const updateInfo = req.body;
+            const updatedDoc = {
+                $set: {
+                    ...updateInfo
+                }
+            }
+            const result = await smtpCollection.updateOne({ _id: new ObjectId(id) }, updatedDoc);
+            res.send(result);
+        })
+
+        // delete smtp email by ID 
+        app.delete("/smtp-delete/:id", async (req, res) => {
+            const { id } = req.params;
+            const result = await smtpCollection.deleteOne({ _id: new ObjectId(id) });
+            res.send(result);
+        })
 
         // Send a ping to confirm a successful connection
         await client.db("admin").command({ ping: 1 });
