@@ -36,27 +36,38 @@ async function run() {
         // Connect the client to the server	(optional starting in v4.7)
         await client.connect();
         const smtpCollection = client.db("emailAutomationDB").collection("smtp");
+        const customerCollection = client.db("emailAutomationDB").collection("customers");
+        const campaignCollection = client.db("emailAutomationDB").collection("campaign");
 
-        //send email and save DB
-        app.post('/send-email', async (req, res) => {
-            const { email, password, hostname, port, encryption, to, subject, message } = req.body;
-            // console.log(email, password, hostname, port, encryption, to, subject, message);
+
+        app.post("/send-email/:id", async (req, res) => {
+            const { id } = req.params;
+
             try {
-                // Configure transporter with user-provided credentials
+                // Find campaign by ID
+                const campaign = await campaignCollection.findOne({ _id: new ObjectId(id) });
+                if (!campaign) return res.status(404).json({ message: "Campaign not found" });
+
+                const { smtpEmail, subject, message, fromName, customerEmail } = campaign;
+
+                // Find SMTP credentials by email
+                const smtpInfo = await smtpCollection.findOne({ email: smtpEmail });
+                if (!smtpInfo) return res.status(404).json({ message: "SMTP credentials not found" });
+
+                const { email, password, hostname, port, encryption } = smtpInfo;
+
+                // Configure Nodemailer transporter
                 const transporter = nodemailer.createTransport({
                     host: hostname,
                     port: parseInt(port),
                     secure: encryption === "SSL", // true for SSL, false for TLS
-                    auth: {
-                        user: email,
-                        pass: password,
-                    },
+                    auth: { user: email, pass: password },
                 });
 
                 // Email options
                 const mailOptions = {
-                    from: email,
-                    to,
+                    from: `"${fromName}" <${email}>`,
+                    to: customerEmail,
                     subject,
                     text: message,
                 };
@@ -64,24 +75,28 @@ async function run() {
                 // Send email
                 await transporter.sendMail(mailOptions);
 
-                // Save email info to MongoDB
-                const emailData = {
-                    email,
-                    password,
-                    hostname,
-                    port,
-                    encryption,
-                    to,
-                    subject,
-                    message,
-                    Date: new Date().toLocaleString(),
+                // Update campaign status to "active"
+                const updatedDoc = {
+                    $set: { status: "active" },
                 };
-                await smtpCollection.insertOne(emailData);
-                res.status(200).json({ success: true, message: "Email sent successfully" });
+                await campaignCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    updatedDoc
+                );
+
+
+                res.status(200).json({ success: true, message: "Email sent and status updated successfully!" });
             } catch (error) {
                 console.error("Error sending email:", error);
                 res.status(500).json({ success: false, message: "Failed to send email" });
             }
+        });
+
+
+        app.post("/create-smtp", async (req, res) => {
+            const smtpInfo = req.body;
+            const result = await smtpCollection.insertOne(smtpInfo);
+            res.send(result);
         })
 
         //get email who sender
@@ -114,6 +129,44 @@ async function run() {
         app.delete("/smtp-delete/:id", async (req, res) => {
             const { id } = req.params;
             const result = await smtpCollection.deleteOne({ _id: new ObjectId(id) });
+            res.send(result);
+        })
+
+        //create customer
+        app.post("/create-customer", async (req, res) => {
+            const customer = req.body;
+            const result = await customerCollection.insertOne(customer);
+            res.send(result);
+        })
+
+        //get all customer
+        app.get("/customers", async (req, res) => {
+            const result = await customerCollection.find().toArray();
+            res.send(result);
+        })
+
+        //create campaign
+        app.post("/create-campaign", async (req, res) => {
+            const campaignInfo = req.body;
+            const result = await campaignCollection.insertOne(campaignInfo);
+            res.send(result);
+        })
+
+        //get all customer
+        app.get("/all-campaign", async (req, res) => {
+            const result = await campaignCollection.find().toArray();
+            res.send(result);
+        })
+
+        //update status from campaign
+        app.patch("/update-status/:id", async (req, res) => {
+            const { id } = req.params;
+            const updatedDoc = {
+                $set: {
+                    status: "active"
+                }
+            }
+            const result = await campaignCollection.updateOne({ _id: new ObjectId(id) }, updatedDoc);
             res.send(result);
         })
 
