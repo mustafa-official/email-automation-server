@@ -253,6 +253,27 @@ async function run() {
             res.send(result);
         })
 
+        //get customer replied message
+        app.get("/replies/:email", async (req, res) => {
+            const { email } = req.params;
+            try {
+                const reply = await replyCollection.findOne({ customerEmail: email });
+                if (reply) {
+                    res.json({
+                        body: reply.body,
+                        receivedAt: reply.receivedAt // Include the receivedAt property
+                    });
+                } else {
+                    res.json(null); // No reply found for this email
+                }
+            } catch (error) {
+                console.error("Error fetching reply:", error);
+                res.status(500).json({ error: "Failed to fetch reply" });
+            }
+        });
+
+
+
 
 
         // Send a ping to confirm a successful connection
