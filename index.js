@@ -3,6 +3,9 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const express = require("express");
 const cors = require("cors");
 const nodemailer = require('nodemailer');
+const imaps = require('imap-simple');
+const { simpleParser } = require('mailparser');
+const cron = require('node-cron');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -31,13 +34,95 @@ const client = new MongoClient(uri, {
     }
 });
 
+// Collections (Global Scope)
+let smtpCollection, campaignCollection, replyCollection;
+
+async function fetchReplies(smtpInfo) {
+    const imapConfig = {
+        user: smtpInfo.email,
+        password: smtpInfo.password,
+        host: "imap.gmail.com",
+        port: 993,
+        tls: true,
+        tlsOptions: { rejectUnauthorized: false },
+        authTimeout: 10000,
+        socketTimeout: 30000,
+    };
+
+    try {
+        const connection = await imaps.connect({ imap: imapConfig });
+        await connection.openBox('INBOX'); // Open the inbox
+
+        const searchCriteria = ['UNSEEN']; // Fetch unread emails
+        const fetchOptions = {
+            bodies: '', // Fetch the entire email body
+            markSeen: true, // Mark emails as read
+        };
+
+        const messages = await connection.search(searchCriteria, fetchOptions);
+
+        if (messages.length === 0) {
+            console.log("No new replies found.");
+            return;
+        }
+
+        for (const message of messages) {
+            const allParts = message.parts.map(part => part.body).join('\n'); // Get raw message content
+
+            // Parse the message using simpleParser
+            const parsed = await simpleParser(allParts);
+            const fromRaw = parsed.from?.text || "Unknown Sender"; // Extract the sender's raw email
+
+            // Extract only the email address using regex
+            const emailMatch = fromRaw.match(/<([^>]+)>/);
+            const customerEmail = emailMatch ? emailMatch[1] : fromRaw;
+
+            let body = parsed.text || parsed.html || "No content available"; // Extract the full message body
+
+            // Use regex to extract only the reply message before the quoted part
+            const replyMatch = body.match(/([\s\S]*?)(?=\nOn\b|\n?>|\r?\n--)/);
+            const cleanBody = replyMatch ? replyMatch[1].trim() : body.trim();
+
+            console.log(`Fetched Reply - Customer Email: ${customerEmail}, Body: ${cleanBody}`);
+
+            const reply = {
+                email: smtpInfo.email, // Original SMTP email
+                customerEmail: customerEmail, // Cleaned customer email
+                body: cleanBody, // Only the reply content
+                receivedAt: new Date(), // Timestamp
+            };
+
+            // Save to MongoDB
+            await saveReplyToDB(reply);
+        }
+
+
+        connection.end(); // Close the connection
+    } catch (error) {
+        console.error("Error fetching replies:", error);
+    }
+}
+
+
+// Save the reply to MongoDB
+async function saveReplyToDB(reply) {
+    try {
+        const result = await replyCollection.insertOne(reply);
+        console.log("Reply saved:", result.insertedId);
+    } catch (error) {
+        console.error("Error saving reply to DB:", error);
+    }
+}
+
+
 async function run() {
     try {
         // Connect the client to the server	(optional starting in v4.7)
         await client.connect();
-        const smtpCollection = client.db("emailAutomationDB").collection("smtp");
+        smtpCollection = client.db("emailAutomationDB").collection("smtp");
         const customerCollection = client.db("emailAutomationDB").collection("customers");
-        const campaignCollection = client.db("emailAutomationDB").collection("campaign");
+        campaignCollection = client.db("emailAutomationDB").collection("campaign");
+        replyCollection = client.db("emailAutomationDB").collection("replies");
 
 
         app.post("/send-email/:id", async (req, res) => {
@@ -89,6 +174,16 @@ async function run() {
             } catch (error) {
                 console.error("Error sending email:", error);
                 res.status(500).json({ success: false, message: "Failed to send email" });
+            }
+        });
+
+        // Fetch all SMTP credentials and check for replies every minute
+        cron.schedule('* * * * *', async () => {
+            console.log("Running cron job to fetch email replies...");
+            const smtpAccounts = await smtpCollection.find().toArray(); // Fetch all SMTP accounts
+
+            for (const smtpInfo of smtpAccounts) {
+                await fetchReplies(smtpInfo); // Fetch replies for each account
             }
         });
 
@@ -158,17 +253,7 @@ async function run() {
             res.send(result);
         })
 
-        //update status from campaign
-        app.patch("/update-status/:id", async (req, res) => {
-            const { id } = req.params;
-            const updatedDoc = {
-                $set: {
-                    status: "active"
-                }
-            }
-            const result = await campaignCollection.updateOne({ _id: new ObjectId(id) }, updatedDoc);
-            res.send(result);
-        })
+
 
         // Send a ping to confirm a successful connection
         await client.db("admin").command({ ping: 1 });
