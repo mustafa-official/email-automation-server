@@ -14,7 +14,9 @@ const port = process.env.PORT || 5000;
 //middleware
 const corsOptions = {
     origin: [
-        "http://localhost:5173"
+        "http://localhost:5173",
+        "https://pathao-mail.web.app",
+        "https://pathao-mail.firebaseapp.com"
     ],
     credentials: true,
     optionSuccessStatus: 200,
@@ -34,7 +36,7 @@ const client = new MongoClient(uri, {
     }
 });
 
-// Collections (Global Scope)
+// collections for Global Scope
 let smtpCollection, campaignCollection, replyCollection;
 
 async function fetchReplies(smtpInfo) {
@@ -51,12 +53,12 @@ async function fetchReplies(smtpInfo) {
 
     try {
         const connection = await imaps.connect({ imap: imapConfig });
-        await connection.openBox('INBOX'); // Open the inbox
+        await connection.openBox('INBOX'); // open  inbox
 
-        const searchCriteria = ['UNSEEN']; // Fetch unread emails
+        const searchCriteria = ['UNSEEN']; // fetch unread emails
         const fetchOptions = {
-            bodies: '', // Fetch the entire email body
-            markSeen: true, // Mark emails as read
+            bodies: '', // fetch entire email body
+            markSeen: true, // mark emails as read
         };
 
         const messages = await connection.search(searchCriteria, fetchOptions);
@@ -67,29 +69,29 @@ async function fetchReplies(smtpInfo) {
         }
 
         for (const message of messages) {
-            const allParts = message.parts.map(part => part.body).join('\n'); // Get raw message content
+            const allParts = message.parts.map(part => part.body).join('\n'); // get raw message content
 
-            // Parse the message using simpleParser
+            // parse the message using simpleParser
             const parsed = await simpleParser(allParts);
-            const fromRaw = parsed.from?.text || "Unknown Sender"; // Extract the sender's raw email
+            const fromRaw = parsed.from?.text || "Unknown Sender"; // extract the sender's raw email
 
-            // Extract only the email address using regex
+            // extract only the email address using regex
             const emailMatch = fromRaw.match(/<([^>]+)>/);
             const customerEmail = emailMatch ? emailMatch[1] : fromRaw;
 
-            let body = parsed.text || parsed.html || "No content available"; // Extract the full message body
+            let body = parsed.text || parsed.html || "No content available"; // extract the full message body
 
-            // Use regex to extract only the reply message before the quoted part
+            // use regex to extract only the reply message before the quoted part
             const replyMatch = body.match(/([\s\S]*?)(?=\nOn\b|\n?>|\r?\n--)/);
             const cleanBody = replyMatch ? replyMatch[1].trim() : body.trim();
 
             console.log(`Fetched Reply - Customer Email: ${customerEmail}, Body: ${cleanBody}`);
 
             const reply = {
-                email: smtpInfo.email, // Original SMTP email
-                customerEmail: customerEmail, // Cleaned customer email
-                body: cleanBody, // Only the reply content
-                receivedAt: new Date(), // Timestamp
+                email: smtpInfo.email, // original SMTP email
+                customerEmail: customerEmail, // cleaned customer email
+                body: cleanBody, // only the reply content
+                receivedAt: new Date(), // timestamp
             };
 
             // Save to MongoDB
@@ -97,14 +99,14 @@ async function fetchReplies(smtpInfo) {
         }
 
 
-        connection.end(); // Close the connection
+        connection.end(); // close the connection
     } catch (error) {
         console.error("Error fetching replies:", error);
     }
 }
 
 
-// Save the reply to MongoDB
+// save all reply in DB
 async function saveReplyToDB(reply) {
     try {
         const result = await replyCollection.insertOne(reply);
@@ -118,7 +120,7 @@ async function saveReplyToDB(reply) {
 async function run() {
     try {
         // Connect the client to the server	(optional starting in v4.7)
-        await client.connect();
+        // await client.connect();
         smtpCollection = client.db("emailAutomationDB").collection("smtp");
         const customerCollection = client.db("emailAutomationDB").collection("customers");
         campaignCollection = client.db("emailAutomationDB").collection("campaign");
@@ -135,13 +137,13 @@ async function run() {
 
                 const { smtpEmail, subject, message, fromName, customerEmail } = campaign;
 
-                // Find SMTP credentials by email
+                // find SMTP credentials by email
                 const smtpInfo = await smtpCollection.findOne({ email: smtpEmail });
                 if (!smtpInfo) return res.status(404).json({ message: "SMTP credentials not found" });
 
                 const { email, password, hostname, port, encryption } = smtpInfo;
 
-                // Configure Nodemailer transporter
+                // configure Nodemailer transporter
                 const transporter = nodemailer.createTransport({
                     host: hostname,
                     port: parseInt(port),
@@ -149,7 +151,7 @@ async function run() {
                     auth: { user: email, pass: password },
                 });
 
-                // Email options
+                // email options
                 const mailOptions = {
                     from: `"${fromName}" <${email}>`,
                     to: customerEmail,
@@ -157,10 +159,10 @@ async function run() {
                     text: message,
                 };
 
-                // Send email
+                // send email
                 await transporter.sendMail(mailOptions);
 
-                // Update campaign status to "active"
+                // update campaign status to "active"
                 const updatedDoc = {
                     $set: { status: "active" },
                 };
@@ -177,13 +179,13 @@ async function run() {
             }
         });
 
-        // Fetch all SMTP credentials and check for replies every minute
+        // fetch all SMTP credentials and check for replies every minute
         cron.schedule('* * * * *', async () => {
             console.log("Running cron job to fetch email replies...");
             const smtpAccounts = await smtpCollection.find().toArray(); // Fetch all SMTP accounts
 
             for (const smtpInfo of smtpAccounts) {
-                await fetchReplies(smtpInfo); // Fetch replies for each account
+                await fetchReplies(smtpInfo); // fetch replies for each account
             }
         });
 
@@ -200,7 +202,7 @@ async function run() {
             res.send(result);
         })
 
-        // Get a single email by ID
+        // get a single email by ID
         app.get("/smtp-email/:id", async (req, res) => {
             const { id } = req.params;
             const result = await smtpCollection.findOne({ _id: new ObjectId(id) });
@@ -257,27 +259,32 @@ async function run() {
         app.get("/replies/:email", async (req, res) => {
             const { email } = req.params;
             try {
-                const reply = await replyCollection.findOne({ customerEmail: email });
-                if (reply) {
-                    res.json({
-                        body: reply.body,
-                        receivedAt: reply.receivedAt // Include the receivedAt property
-                    });
-                } else {
-                    res.json(null); // No reply found for this email
-                }
+                const replies = await replyCollection
+                    .find({ customerEmail: email })
+                    .sort({ receivedAt: -1 }) // sort by date, latest first
+                    .toArray(); // convert to array
+
+                res.json(replies); // send the array of replies
             } catch (error) {
-                console.error("Error fetching reply:", error);
-                res.status(500).json({ error: "Failed to fetch reply" });
+                console.error("Error fetching replies:", error);
+                res.status(500).json({ error: "Failed to fetch replies" });
             }
         });
+
+        //get all SMTP
+        app.get("/statistics-count", async (req, res) => {
+            const smtp = await smtpCollection.countDocuments();
+            const customers = await customerCollection.countDocuments();
+            const campaign = await campaignCollection.countDocuments();
+            res.send({ smtp, customers, campaign });
+        })
 
 
 
 
 
         // Send a ping to confirm a successful connection
-        await client.db("admin").command({ ping: 1 });
+        // await client.db("admin").command({ ping: 1 });
         console.log("Pinged your deployment. You successfully connected to MongoDB!");
     } finally {
         // Ensures that the client will close when you finish/error
@@ -286,7 +293,9 @@ async function run() {
 }
 run().catch(console.dir);
 
-
+app.get("/", async (req, res) => {
+    res.send("pathao-mail is running")
+})
 
 
 app.listen(port, () => {
