@@ -47,8 +47,8 @@ async function fetchReplies(smtpInfo) {
         port: 993,
         tls: true,
         tlsOptions: { rejectUnauthorized: false },
-        authTimeout: 10000,
-        socketTimeout: 30000,
+        authTimeout: 20000,
+        socketTimeout: 60000,
     };
 
     try {
@@ -102,6 +102,8 @@ async function fetchReplies(smtpInfo) {
         connection.end(); // close the connection
     } catch (error) {
         console.error("Error fetching replies:", error);
+    } finally {
+        if (connection) connection.end(); // Close the connection if open
     }
 }
 
@@ -120,7 +122,7 @@ async function saveReplyToDB(reply) {
 async function run() {
     try {
         // Connect the client to the server	(optional starting in v4.7)
-        // await client.connect();
+        await client.connect();
         smtpCollection = client.db("emailAutomationDB").collection("smtp");
         const customerCollection = client.db("emailAutomationDB").collection("customers");
         campaignCollection = client.db("emailAutomationDB").collection("campaign");
@@ -135,7 +137,7 @@ async function run() {
                 const campaign = await campaignCollection.findOne({ _id: new ObjectId(id) });
                 if (!campaign) return res.status(404).json({ message: "Campaign not found" });
 
-                const { smtpEmail, subject, message, fromName, customerEmail } = campaign;
+                const { smtpEmail, subject, message, fromName, allCustomerEmail } = campaign;
 
                 // find SMTP credentials by email
                 const smtpInfo = await smtpCollection.findOne({ email: smtpEmail });
@@ -154,7 +156,7 @@ async function run() {
                 // email options
                 const mailOptions = {
                     from: `"${fromName}" <${email}>`,
-                    to: customerEmail,
+                    to: allCustomerEmail,
                     subject,
                     text: message,
                 };
@@ -231,21 +233,60 @@ async function run() {
 
         //create customer
         app.post("/create-customer", async (req, res) => {
-            const customer = req.body;
-            const result = await customerCollection.insertOne(customer);
-            res.send(result);
-        })
+            const { name, email, allCustomer } = req.body;
+
+            try {
+                const existingData = await customerCollection.findOne({ type: allCustomer });
+
+                const newCustomer = { name, email };
+
+                if (existingData) {
+                    // If the document exists, update the list by appending the new customer
+                    const result = await customerCollection.updateOne(
+                        { type: allCustomer },
+                        { $push: { customers: newCustomer } }
+                    );
+                    res.send(result);
+                } else {
+                    // If the document doesn't exist, create it with the new customer
+                    const result = await customerCollection.insertOne({
+                        type: allCustomer,
+                        customers: [newCustomer],
+                    });
+                    res.send(result);
+                }
+            } catch (error) {
+                console.error(error);
+                res.status(500).send({ message: "Failed to create customer" });
+            }
+        });
+
 
         //get all customer
         app.get("/customers", async (req, res) => {
-            const result = await customerCollection.find().toArray();
-            res.send(result);
-        })
+            try {
+                const result = await customerCollection.findOne({ type: "allCustomer" });
+
+                // Always return an array, even if no customers are found
+                res.send(result?.customers || []);
+            } catch (error) {
+                console.error("Error fetching customers:", error);
+                res.status(500).send({ message: "Failed to fetch customers" });
+            }
+        });
+
 
         //create campaign
         app.post("/create-campaign", async (req, res) => {
             const campaignInfo = req.body;
             const result = await campaignCollection.insertOne(campaignInfo);
+            res.send(result);
+        })
+
+        // delete smtp email by ID 
+        app.delete("/campaign-delete/:id", async (req, res) => {
+            const { id } = req.params;
+            const result = await campaignCollection.deleteOne({ _id: new ObjectId(id) });
             res.send(result);
         })
 
@@ -284,7 +325,7 @@ async function run() {
 
 
         // Send a ping to confirm a successful connection
-        // await client.db("admin").command({ ping: 1 });
+        await client.db("admin").command({ ping: 1 });
         console.log("Pinged your deployment. You successfully connected to MongoDB!");
     } finally {
         // Ensures that the client will close when you finish/error
