@@ -47,8 +47,8 @@ async function fetchReplies(smtpInfo) {
         port: 993,
         tls: true,
         tlsOptions: { rejectUnauthorized: false },
-        authTimeout: 20000,
-        socketTimeout: 60000,
+        authTimeout: 30000,
+        socketTimeout: 120000,
     };
 
     try {
@@ -191,7 +191,7 @@ async function run() {
             }
         });
 
-
+        //create smtp
         app.post("/create-smtp", async (req, res) => {
             const smtpInfo = req.body;
             const result = await smtpCollection.insertOne(smtpInfo);
@@ -275,6 +275,12 @@ async function run() {
             }
         });
 
+        //delete all customers
+        app.delete("/customers-delete", async (req, res) => {
+            const result = await customerCollection.deleteMany();
+            res.send(result);
+        })
+
 
         //create campaign
         app.post("/create-campaign", async (req, res) => {
@@ -312,16 +318,19 @@ async function run() {
             }
         });
 
-        //get all SMTP
+        //get all smtp, customer, campaign number
         app.get("/statistics-count", async (req, res) => {
             const smtp = await smtpCollection.countDocuments();
-            const customers = await customerCollection.countDocuments();
             const campaign = await campaignCollection.countDocuments();
+
+            const customerDoc = await customerCollection.findOne(
+                { type: "allCustomer" },
+                { projection: { customers: 1 } } // only return the customers filed
+            );
+
+            const customers = customerDoc?.customers?.length || 0;
             res.send({ smtp, customers, campaign });
         })
-
-
-
 
 
         // Send a ping to confirm a successful connection
