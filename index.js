@@ -15,8 +15,7 @@ const port = process.env.PORT || 5000;
 const corsOptions = {
     origin: [
         "http://localhost:5173",
-        "https://pathao-mail.web.app",
-        "https://pathao-mail.firebaseapp.com"
+        "https://pathao-mail.web.app"
     ],
     credentials: true,
     optionSuccessStatus: 200,
@@ -122,7 +121,7 @@ async function saveReplyToDB(reply) {
 async function run() {
     try {
         // Connect the client to the server	(optional starting in v4.7)
-        await client.connect();
+        // await client.connect();
         smtpCollection = client.db("emailAutomationDB").collection("smtp");
         const customerCollection = client.db("emailAutomationDB").collection("customers");
         campaignCollection = client.db("emailAutomationDB").collection("campaign");
@@ -277,7 +276,7 @@ async function run() {
 
         //delete all customers
         app.delete("/customers-delete", async (req, res) => {
-            const result = await customerCollection.deleteMany();
+            const result = await customerCollection.deleteOne({ type: "allCustomer" });
             res.send(result);
         })
 
@@ -334,7 +333,7 @@ async function run() {
 
 
         // Send a ping to confirm a successful connection
-        await client.db("admin").command({ ping: 1 });
+        // await client.db("admin").command({ ping: 1 });
         console.log("Pinged your deployment. You successfully connected to MongoDB!");
     } finally {
         // Ensures that the client will close when you finish/error
